@@ -1,11 +1,3 @@
-/*TODO1:为网站添加图片背景  */
-body{
-    background-image: url('https://pic.vjshi.com/2020-09-26/50c9af990483b7dec82c67f815dd3f25/online/7b2410e70c536415cee9f2752d063ec6.jpg?x-oss-process=style/resize_w_720');
-    background-size: 150%;
-    background-repeat: no-repeat;
-}
-
-/*DIY区域：尝试修改不同属性对应的值，选择合适的边距和颜色来匹配背景*/
 h1{
     text-align: center;
     color: #00a2ff;
