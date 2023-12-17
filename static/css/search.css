@@ -1,0 +1,33 @@
+body{
+                text-align:center;
+                overflow: hidden;
+                background-size: cover;
+                width: 100%;
+                z-index:9999;
+                height: 100%;
+                position: relative;
+            }
+            input {
+                width: 400px;
+                height: 45px;
+                line-height: 45px;
+                border-radius: 20px;
+                border: 1px solid #61eaff;
+                box-shadow:5px 5px 21px #8cfeff;
+                padding: 0px 15px;
+            }
+            .btn {
+                width: 100px;
+                height: 37px;
+                line-height: 35px;
+                font-size: 20px;
+                border-radius: 6px;
+                background-color: #ffe185;
+                border: 1px solid #ffe185;
+            }
+            .btn:hover {
+                background-color: #61eaff;
+                border-color: 61eaff;
+                color: black;
+                cursor: pointer;
+            }
