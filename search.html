@@ -2,10 +2,15 @@
     <head>
         <meta charset="UTF-8">
         <title>微光工作室-light搜索</title>
+        <link href="./static/css/search.css" rel="stylesheet">
+  <style id="backgroundStyle">
+    body {
+      background-color: #e8f2fb;
+    }
+  </style>
         <link href="https://cdn.staticfile.org/twitter-bootstrap/5.1.1/css/bootstrap.min.css" rel="stylesheet">
         <link href="./Database/img/titleimages/smailightlogo.png"  rel="shortcut icon" type="image/x-icon" />
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="./static/css/search.css" rel="stylesheet">
         <script src="https://cdn.staticfile.org/twitter-bootstrap/5.1.1/js/bootstrap.bundle.min.js"></script>
     </head>
     <body>
@@ -43,11 +48,65 @@
                   </li>
               </div>
             </nav>
+<body style="overflow-x:hidden;"></body>
+  <div class="container">
+    <h1 color="blue">light搜索</h1>
+   <div class="current-time" id="current-time"></div><iframe scrolling="no" src="https://tianqiapi.com/api.php?style=tf&skin=baidu" frameborder="0" width="400" height="24" allowtransparency="true"></iframe>
+    <div class="search-box">
+      <select id="searchEngine" onchange="changeSearchEngine()">
+        <option value="https://www.baidu.com/s?wd=">百度</option>
+        <option value="https://www.bing.com/search?q=">必应</option>
+        <option value="https://www.youdao.com/result?word=">有道翻译</option>
+        <option value="https://so.csdn.net/so/search?q=">CSDN</option>
+      </select>
+    <input type="text" id="searchInput" placeholder="在这里输入搜索关键词" onkeydown="handleKeyDown(event)" onfocus="this.select()">
+      <button class="search-box" onclick="search()">搜索</button>
+    </div>
+  </div>
+  <script>
+    function search() {
+      var searchInput = document.getElementById("searchInput");
+      var searchEngine = document.getElementById("searchEngine").value;
+      var searchQuery = searchInput.value.trim();
 
-        <h1 color=blue>light search<br>
-        <form target="_blank" method="get" action="https://www.baidu.com/s">
-            <input type="text" placeholder="请输入关键词" name="word" class="text" />
-           <input type="submit" value="搜索" class="btn">
-        </form> 
-    </body>
+      if (searchQuery !== "") {
+        var searchUrl = searchEngine + encodeURIComponent(searchQuery);
+        window.open(searchUrl, "_blank");
+      }
+    }
+
+    function changeSearchEngine() {
+      var searchInput = document.getElementById("searchInput");
+      searchInput.focus();
+    }
+
+    function handleKeyDown(event) {
+      if (event.keyCode === 13) {
+        search();
+      }
+    }
+
+    function openSettingsModal() {
+      var modal = document.getElementById("settingsModal");
+      modal.style.display = "block";
+    }
+
+    function closeSettingsModal() {
+      var modal = document.getElementById("settingsModal");
+      modal.style.display = "none";
+    }
+  </script>
+  <script>
+    function getCurrentTime() {
+      var now = new Date();
+      var hours = now.getHours();
+      var minutes = now.getMinutes();
+      var seconds = now.getSeconds();
+      
+      var currentTime = hours + ":" + (minutes < 10 ? "0" + minutes : minutes) + ":" + (seconds < 10 ? "0" + seconds : seconds);
+      document.getElementById("current-time").innerHTML = "当前时间：" + currentTime;
+    }
+    setInterval(getCurrentTime,1000);
+  </script>
+  <footer style="text-align: center;">一言：多看看这世界吧，不要一直宅在家里</footer>
 </html>
