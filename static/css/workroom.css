@@ -1,0 +1,55 @@
+h1{
+    text-align: center;
+    color: #00a2ff;
+    margin-top: 20%;
+    margin-bottom: 14%;
+}
+img{
+    width: 30;
+    height: 30;
+}
+/*TODO2:创建类名为 photo的选择器（不要忘记符号.），并尝试修改不同属性值*/
+.photo{
+    height: 150px;
+    margin-top: 15px;
+    margin-bottom: 15px;
+} 
+
+
+/*DIY区域： 底部版权样式
+/*背景色 #f08c55 搭配背景图 bg1.png */
+/*背景色 #8ba13f 搭配背景图 bg2.png,*/
+/*背景色 #71170d 搭配背景图 bg4.png */
+/*背景色 #aeacc6 搭配背景图 bg5.png */
+
+.banquan{
+    background-color:#55f0e6;    
+    text-align: center;
+    color:white;
+    margin-top: 20px;
+    margin-right:0px;
+    padding:20px;
+}
+
+
+h2{
+    margin-left:5%;
+    margin-top: 20px;
+    margin-bottom: 15px;
+    color:rgba(56, 107, 178, 0.63);
+}
+p{
+    margin-left: 5%;
+    margin-right:5%;
+    color:#b238389a;
+}
+
+h5{
+    text-align: right;
+    margin-right:40px;
+    color:rgba(178, 56, 56, 0.604)
+}
+
+h4{
+    color: #3863b2;
+}
