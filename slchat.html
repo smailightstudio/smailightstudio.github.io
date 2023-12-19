@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en"> 
+<header>
+    <p color=red>本聊天室暂时并不支持将聊天记录存在电脑里，关闭标签页你与他人了聊天记录见过消失。如需备份，请及时备份</p>
+</br>
+    <a href="./index.html">首页</a>
+</header>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="">
+<meta http-equiv="X-UA-Compatible" content="ie=edge">
+<title>天龙基地</title>
+<link rel="shortcut icon" href="/images/icon/message/5.png" type="image/x-icon" /> 
+<style>
+header
+{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 0;
+    background: linear-gradient(#009688 0%,#009688 130px,#d9dbd5 130px,#d9dbd5 100%)
+}
+body{
+    background-color: white;
+}
+.container
+{
+    position: relative;
+    width: 1396px;
+    max-width: 100%;
+    height: calc( 100vh - 40px);
+    background:#fff;
+    box-shadow: 0 1px 1px 0 rgba(0,0,0,0.06),0 2px 5px 0 rgba(0,0,0,0.06);
+    display: flex;
+}
+.container .leftSide
+{
+    position: relative;
+    flex:30%;
+    background:#fff;
+    border-right: 1px solid rgba(0, 0, 0, 0.2);
+}
+.container .rightside
+{
+    position: relative;
+    flex: 70%;
+    background:#e5ddd5;
+}
+.container .rightside::before
+{
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background:url(img6-bg.jpg) ;
+    opacity: 0.06;
+}
+.userimg
+{
+    position: relative;
+    width: 40px;
+    height: 40px;
+    overflow: hidden;
+    border-radius: 50%;
+    cursor: pointer;
+}
+.cover
+{
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+</style>
+<style>html,body{margin:0;padding:0;--fh:60px;--fp:10px;--fbw:70px;background-color:#eee}.lite-chatbox{padding-bottom:var(--fh)}.x-count{position:fixed;bottom:var(--fh);left:50%;transform:translate(-50%,-2px)}.footer{position:fixed;bottom:0;left:0;height:var(--fh);width:100%;box-sizing:border-box;padding:var(--fp)}.footer textarea,.footer input,.footer button{border-radius:5px;position:absolute;top:var(--fp);width:calc(100% - var(--fbw) - var(--fp)*3);height:calc(var(--fh) - var(--fp)*2);box-sizing:border-box;border:none}.footer input,.footer textarea{left:var(--fp);resize:none}.footer button{background-color:#49b649;padding:5px 10px;text-align:center;text-decoration:none;border:1px solid #49b649;cursor:pointer;outline:0;color:#fff;right:var(--fp);width:var(--fbw)}
+</style>
+</head> 
+<body>
+<div class="lite-chatbox">
+<div class="tips">
+<span class="tips-info x-count">
+当前人数: <b>*</b></span> </div>
+</div> <div class="footer"> 
+<textarea id="msg">
+</textarea>  
+<button>
+发送
+</button>
+</div> 
+<script src="./static/js/chat.js">
+</script>
+<script>var info={name:localStorage._chat_name||''};ws.on('a',function(a,d){if(a=='inputName'){alertify.prompt(d.tips,name=>{info.name=name;localStorage._chat_name=name;ws.send({name:name});});}else{showMsg('未知操作类型:'+a);}});ws.on('tips',function(a){showMsg(a)});ws.on('open',function(a){info.name?ws.send({name:info.name}):ws.send({time:1});});ws.on('close',function(a){setTimeout('ws.link()',10000);});ws.on('msg',function(a){showMsg(a);});var $count=document.querySelector('.x-count b');ws.on('count',function(a){$count.innerText=a;});ws.link('wss://ws.asilu.com:8090');var $msg=document.querySelector('#msg');$msg.addEventListener('keyup',function(e){if(e.ctrlKey&&e.keyCode==13){sendMessage();}});document.querySelector('.footer button').addEventListener('click',function(e){sendMessage();});function sendMessage(){if(/^\s*$/.test($msg.value)){return showMsg('消息不能为空',0,'tips-warning');}
+ws.send({msg:$msg.value});$msg.value='';}
+var last=1;var $messges=document.querySelector('.lite-chatbox');function showMsg(ms,i,t){let m;if(typeof ms=='string'){m=ms.replace(/<[^>]*>/g,'').replace(/\n/g,'<br>');}else{m=ms.content.replace(/<[^>]*>/g,'').replace(/\n/g,'<br>');i=ms.name==info.name?2:1;ms.name=ms.name.replace(/<[^>]*>/g,'').replace(/\n/g,'<br>');}
+if((new Date)*1-last>15E3){last=(new Date)*1;showMsg((new Date).toLocaleString(),0);}
+let $div=document.createElement('div');if(!i){$div.className='tips';$div.innerHTML=`<span class="${t}" title="${(new Date).toLocaleTimeString()}">${m}</span>`;}else{$div.className=i==1?'cleft cmsg':'cright cmsg';$div.innerHTML=`
+<img class="headIcon radius" ondragstart="return false;" onclick="dbclick.call(this, '${ms.name}')" oncontextmenu="return false;" src="https://api.asilu.com/avatar/${ms.name}" /> <span class="name">${ms.name}</span> <span class="content">${m}</span>`;}
+$messges.appendChild($div);scroll();}
+ws.on('pat',function(a){showMsg(`"${a}" 拍了拍你`,0,'tips-warning');});function pat(name){let m;if(name==info.name){m='你拍了拍"狗头"';}else{m=`你拍了拍"${name}"`;ws.send({pat:name})}
+showMsg(m,0,'tips-warning');}
+function scroll(){document.documentElement.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});}
+function dbclick(name){if(typeof this._count=='undefined'){this._count=0;}
+this._tout&&clearTimeout(this._tout);if(++this._count>1){pat(name)
+this._count=0;}else{let that=this;this._tout=setTimeout(function(){that._count=0;},300);}}
+setTimeout(scroll,500);
+</script> 
+    <script src="./static/js/chat1.js"
+    </script> 
+    <script>debug({title:document.title,url:location.href.indexOf('data:')==0?location.href.slice(0,99):location.href,referrer:document.referrer})</script>   <script type="text/javascript">var _paq=_paq||[];_paq.push(['trackPageView']);_paq.push(['enableLinkTracking']);(function(){var u="//api.asilu.com/piwik/";_paq.push(['setTrackerUrl',u+'piwik.php']);_paq.push(['setSiteId','1']);var d=document,g=d.createElement('script'),s=d.getElementsByTagName('script')[0];g.type='text/javascript';g.async=true;g.defer=true;g.src=u+'piwik.js';s.parentNode.insertBefore(g,s);})();</script> <script src="https://cdn.asilu.com/demo/js/year.js"></script> <noscript><p><img src="//api.asilu.com/piwik/piwik.php?idsite=1&rec=1" style="border:0;" alt="" /></p></noscript></body> </html>
