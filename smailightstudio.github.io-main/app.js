@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
 import {
-  getDatabase, ref, get, set, push, onValue, onDisconnect, remove, update
+  getDatabase, ref, get, set, push, onValue, onChildAdded, query, orderByChild, startAt, onDisconnect, remove
 } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
 
 /*
@@ -31,6 +31,7 @@ let messagesUnsub = null;
 let membersUnsub = null;
 let roomUnsub = null;
 let keyBytes = null;
+let currentJoinTime = 0;
 
 const $ = id => document.getElementById(id);
 const login = $("login");
@@ -106,8 +107,9 @@ async function join() {
       if (expected !== bufToB64(verifier)) throw new Error("房间密码错误");
     }
 
+    currentJoinTime = Date.now();
     memberRef = ref(db, `rooms/${room}/members/${uid}`);
-    await set(memberRef, {nickname, online:true, joinedAt:Date.now()});
+    await set(memberRef, {nickname, online:true, joinedAt:currentJoinTime});
     onDisconnect(memberRef).remove();
 
     $("roomTitle").textContent = `房间：${room}`;
@@ -160,17 +162,19 @@ function listen() {
     }
   });
 
-  messagesUnsub = onValue(messagesRef(), async snap => {
-    messagesEl.innerHTML = "";
-    const data = snap.val() || {};
-    const items = Object.entries(data).sort((a,b)=>(a[1].createdAt||0)-(b[1].createdAt||0));
-    for (const [id,m] of items) {
-      try {
-        const text = await decryptText(m.iv, m.data);
-        addMessage(m.nickname || "匿名", text, m.sender === uid);
-      } catch {}
+  // 只监听“加入房间之后”的新消息，不加载 Firebase 中以前的聊天记录。
+  // 这样可以保证房间成员都能收到广播，同时新加入的人不会看到旧消息。
+  const newMessagesQuery = query(messagesRef(), orderByChild("createdAt"), startAt(currentJoinTime));
+  messagesUnsub = onChildAdded(newMessagesQuery, async snap => {
+    const m = snap.val();
+    if (!m) return;
+    try {
+      const text = await decryptText(m.iv, m.data);
+      addMessage(m.nickname || "匿名", text, m.sender === uid);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+      console.warn("无法解密消息", e);
     }
-    messagesEl.scrollTop = messagesEl.scrollHeight;
   });
 }
 
@@ -225,6 +229,7 @@ function cleanup() {
   messagesUnsub = membersUnsub = roomUnsub = null;
   currentRoom = null;
   keyBytes = null;
+  currentJoinTime = 0;
 }
 async function leave() {
   try { if (memberRef) await remove(memberRef); } catch {}
