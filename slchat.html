@@ -7,10 +7,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <a href="./index.html">home</a>
   <main class="app">
     <section id="login" class="card">
-      <h1>🔐 smailight chat room</h1>
+      <h1>🔐 Private Chat</h1>
       <input id="roomId" placeholder="房间 ID">
       <input id="roomPassword" type="password" placeholder="房间密码">
       <input id="nickname" maxlength="20" placeholder="你的昵称">
@@ -24,6 +23,7 @@
           <h2 id="roomTitle"></h2>
           <small id="online"></small>
         </div>
+        <button id="clearHistoryBtn" type="button">清除本机聊天记录</button>
         <button id="leaveBtn" class="secondary">退出</button>
       </header>
 
