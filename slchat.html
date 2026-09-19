@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SLChat</title>
+  <title>Private Chat — Firebase 免费版</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <a href="./index.html">返回首页</a>
   <main class="app">
     <section id="login" class="card">
-      <h1>🔐SMAILIGHT CHAT ROOM</h1>
+      <h1>🔐 Private Chat</h1>
       <input id="roomId" placeholder="房间 ID">
       <input id="roomPassword" type="password" placeholder="房间密码">
       <input id="nickname" maxlength="20" placeholder="你的昵称">
@@ -37,7 +36,12 @@
 
         <section class="chatPanel">
           <div id="messages" class="messages"></div>
-          <form id="sendForm">
+          <div class="fileControls">
+  <input id="fileInput" type="file" hidden>
+  <button id="fileBtn" type="button" onclick="document.getElementById('fileInput').click()">📎 图片/文件</button>
+  <span id="fileStatus"></span>
+</div>
+<form id="sendForm">
             <input id="messageInput" maxlength="1000" autocomplete="off" placeholder="输入消息…">
             <button>发送</button>
           </form>
