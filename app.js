@@ -240,7 +240,7 @@ function membersRef() { return ref(db, `rooms/${currentRoom}/members`); }
 function messagesRef() { return ref(db, `rooms/${currentRoom}/messages`); }
 
 async function join() {
-  status.textContent = "正在连接服务器";$('joinBtn').disabled=true;
+  status.textContent = "正在连接可能需要梯子";$('joinBtn').disabled=true;
   const room=$("roomId").value.trim(),password=$("roomPassword").value,nickname=$("nickname").value.trim()||"匿名";
   if(!room||!password){status.textContent="请输入房间 ID 和密码";$('joinBtn').disabled=false;return;}
   try {
@@ -273,7 +273,7 @@ function listen() {
       if(isHost()&&id!==uid){const btn=document.createElement("button");btn.textContent="踢出";btn.className="kick";btn.onclick=()=>kick(id);li.appendChild(btn);}list.appendChild(li);
     });
     $("ownerInfo").textContent=`房主：${members[currentHost()]?.nickname||"房主"}`;
-  },error=>{console.error("成员列表读取失败:",error);$("online").textContent="打开与服务器链接或被踢出";$("members").innerHTML="";const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="请检查 Firebase Database Rules 是否已发布";});
+  },error=>{console.error("成员列表读取失败:",error);$("online").textContent="打开服务器连接或被踢出";$("members").innerHTML="";const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="请检查 Firebase Database Rules 是否已发布";});
 
   roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}else{chat.dataset.host=snap.val().hostUid||chat.dataset.host||"";}});
 
