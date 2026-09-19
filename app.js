@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
 import {
-  getDatabase, ref, get, set, push, onValue, onChildAdded, query, orderByChild, startAt, onDisconnect, remove
+  getDatabase, ref, get, set, push, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, onDisconnect, remove
 } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
 
 const firebaseConfig = {
@@ -179,15 +179,56 @@ async function downloadEncryptedFile(m) {
 }
 function addFileMessage(m,mine) {
   const div=document.createElement("div"); div.className="msg"+(mine?" mine":""); div.dataset.messageId=m.id||"";
-  const meta=document.createElement("div"); meta.className="meta"; meta.textContent=m.nickname||"匿名";
-  const button=document.createElement("button"); button.type="button"; button.className="fileMessage"; button.textContent=`📎 ${m.name||"文件"}${m.size?` (${formatFileSize(m.size)})`:""}`; button.onclick=()=>downloadEncryptedFile(m);
-  div.appendChild(meta);div.appendChild(button);addRecallButton(div,m);messagesEl.appendChild(div);
+  const meta=document.createElement("div"); meta.className="meta"; meta.textContent=m.nickname||"匿名"; div.appendChild(meta);
+  if (m.mime && m.mime.startsWith("image/")) {
+    const img=document.createElement("img"); img.className="filePreview"; img.alt=m.name||"图片"; img.title=m.name||"图片";
+    const loading=document.createElement("div"); loading.className="fileLoading"; loading.textContent=`正在加载图片… ${formatFileSize(m.size||0)}`;
+    div.appendChild(loading); div.appendChild(img);
+    loadEncryptedFileBlob(m).then(blob=>{
+      img.src=URL.createObjectURL(blob); loading.remove();
+      img.onload=()=>URL.revokeObjectURL(img.src);
+    }).catch(e=>{loading.textContent="图片加载失败，点击下载"; const b=document.createElement("button");b.type="button";b.className="fileMessage";b.textContent=`📎 ${m.name||"图片"}`;b.onclick=()=>downloadEncryptedFile(m);loading.replaceWith(b);});
+  } else {
+    const button=document.createElement("button"); button.type="button"; button.className="fileMessage"; button.textContent=`📎 ${m.name||"文件"}${m.size?` (${formatFileSize(m.size)})`:""}`; button.onclick=()=>downloadEncryptedFile(m); div.appendChild(button);
+  }
+  addRecallButton(div,m); messagesEl.appendChild(div);
 }
-function addRecallButton(container,m){if(!m.id||(m.sender!==uid&&!isHost()))return;const btn=document.createElement("button");btn.type="button";btn.className="recallBtn";btn.textContent="撤回";btn.onclick=()=>recallMessage(m);container.appendChild(btn);}
+function addRecallButton(container,m){
+  if(!m.id || (m.sender!==uid && !isHost())) return;
+  const btn=document.createElement("button"); btn.type="button"; btn.className="recallBtn"; btn.textContent="撤回";
+  btn.onclick=()=>recallMessage(m); container.appendChild(btn);
+}
+async function loadEncryptedFileBlob(m){
+  const snap=await get(fileRef(m.fileId)); if(!snap.exists()) throw new Error("文件已被撤回或不存在");
+  const v=snap.val(), meta=v.meta||{}, chunks=v.chunks||{};
+  const total=Number(m.totalChunks||meta.totalChunks||0); const parts=[];
+  for(let i=0;i<total;i++){ if(typeof chunks[i]!=="string") throw new Error(`文件分块 ${i+1} 缺失`); parts.push(new Uint8Array(b64ToBuf(chunks[i]))); }
+  const encrypted=new Uint8Array(parts.reduce((n,x)=>n+x.length,0)); let pos=0; for(const x of parts){encrypted.set(x,pos);pos+=x.length;}
+  const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(b64ToBuf(m.iv||meta.iv))},keyBytes,encrypted);
+  return new Blob([plain],{type:m.mime||meta.mime||"application/octet-stream"});
+}
+async function downloadEncryptedFile(m){
+  try{const blob=await loadEncryptedFileBlob(m);const u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=m.name||"file";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);}
+  catch(e){console.error(e);alert("文件下载或解密失败："+(e.message||"未知错误"));}
+}
+async function deleteFileData(fileId){
+  const snap=await get(fileRef(fileId));
+  if(!snap.exists()) return;
+  const d=snap.val()||{}, chunks=d.chunks||{};
+  for(const k of Object.keys(chunks)) await remove(ref(db,`rooms/${currentRoom}/files/${fileId}/chunks/${k}`));
+  await remove(fileMetaRef(fileId));
+}
 async function recallMessage(m){
   if(!m.id||!currentRoom||(m.sender!==uid&&!isHost()))return;
-  try{await remove(ref(db,`rooms/${currentRoom}/messages/${m.id}`));if(m.type==="file"&&m.fileId){try{await remove(fileRef(m.fileId));}catch(e){console.warn("文件删除失败",e);}}removeLocalMessage(m.id);const el=[...messagesEl.children].find(x=>x.dataset.messageId===m.id);if(el)el.remove();}
-  catch(e){alert("撤回失败："+(e.message||e.code||"未知错误"));}
+  try{
+    await remove(ref(db,`rooms/${currentRoom}/messages/${m.id}`));
+    if(m.type==="file"&&m.fileId){
+      try{await deleteFileData(m.fileId);}catch(e){console.warn("文件数据删除失败",e);}
+    }
+    removeLocalMessage(m.id);
+    const el=[...messagesEl.children].find(x=>x.dataset.messageId===m.id);
+    if(el)el.remove();
+  }catch(e){alert("撤回失败："+(e.message||e.code||"未知错误"));}
 }
 
 async function authUser() {
@@ -199,7 +240,7 @@ function membersRef() { return ref(db, `rooms/${currentRoom}/members`); }
 function messagesRef() { return ref(db, `rooms/${currentRoom}/messages`); }
 
 async function join() {
-  status.textContent = "正在连接云端服务器（可能需要梯子）";$('joinBtn').disabled=true;
+  status.textContent = "正在连接云端服务器";$('joinBtn').disabled=true;
   const room=$("roomId").value.trim(),password=$("roomPassword").value,nickname=$("nickname").value.trim()||"匿名";
   if(!room||!password){status.textContent="请输入房间 ID 和密码";$('joinBtn').disabled=false;return;}
   try {
@@ -231,27 +272,32 @@ function listen() {
       const li=document.createElement("li"),name=document.createElement("span");name.textContent=`${m.nickname||"匿名"}${id===currentHost()?" 👑":""}`;li.appendChild(name);
       if(isHost()&&id!==uid){const btn=document.createElement("button");btn.textContent="踢出";btn.className="kick";btn.onclick=()=>kick(id);li.appendChild(btn);}list.appendChild(li);
     });
-    $("ownerInfo").textContent=`房主在线：${members[currentHost()]?.nickname||"房主下线"}`;
-  },error=>{
-    console.error("成员列表读取失败:",error);$("online").textContent="成员列表读取失败";$("members").innerHTML="";
-    const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="你已与服务器断开连接或被踢出";
-  });
+    $("ownerInfo").textContent=`房主：${members[currentHost()]?.nickname||"房主下线"}`;
+  },error=>{console.error("成员列表读取失败:",error);$("online").textContent="与服务器连接异常或被踢出";$("members").innerHTML="";const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="与服务器打开链接或被踢出";});
 
-  roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}});
-  const newMessagesQuery=query(messagesRef(),orderByChild("createdAt"),startAt(currentJoinTime));
-  messagesUnsub=onChildAdded(newMessagesQuery,async snap=>{
-    const m=snap.val();if(!m)return;
-    try{
-      if(m.type==="file"){
-        const message={id:snap.key,type:"file",sender:m.sender,nickname:m.nickname||"匿名",name:m.name,mime:m.mime,size:m.size,iv:m.iv,fileId:m.fileId,ownerUid:m.ownerUid||m.sender,createdAt:m.createdAt||Date.now()};
-        saveLocalMessage(message);addFileMessage(message,message.sender===uid);
-      }else{
-        const text=await decryptText(m.iv,m.data);
-        const message={id:snap.key,sender:m.sender,nickname:m.nickname||"匿名",text,createdAt:m.createdAt||Date.now()};
-        saveLocalMessage(message);addMessage(message.nickname,message.text,message.sender===uid,message);
-      }
-      messagesEl.scrollTop=messagesEl.scrollHeight;
-    }catch(e){console.warn("无法处理消息",e);}
+  roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}else{chat.dataset.host=snap.val().hostUid||chat.dataset.host||"";}});
+
+  // 直接监听整个消息节点：新增、删除、撤回都会同步到电脑和手机，避免只监听加入房间后的消息导致撤回不同步。
+  messagesUnsub=onValue(messagesRef(),async snap=>{
+    const data=snap.val()||{}; const ids=new Set(Object.keys(data));
+    for(const el of [...messagesEl.children]) if(el.dataset.messageId && !ids.has(el.dataset.messageId)) el.remove();
+    const existing=new Set([...messagesEl.children].map(el=>el.dataset.messageId).filter(Boolean));
+    const arr=Object.entries(data).sort((a,b)=>(a[1]?.createdAt||0)-(b[1]?.createdAt||0));
+    for(const [id,m] of arr){
+      if(!m || existing.has(id)) continue;
+      try{
+        if(m.type==="file"){
+          const message={id,type:"file",sender:m.sender,nickname:m.nickname||"匿名",name:m.name,mime:m.mime,size:m.size,iv:m.iv,fileId:m.fileId,ownerUid:m.ownerUid||m.sender,createdAt:m.createdAt||Date.now(),totalChunks:m.totalChunks};
+          saveLocalMessage(message); addFileMessage(message,message.sender===uid);
+        }else{
+          const text=await decryptText(m.iv,m.data); const message={id,sender:m.sender,nickname:m.nickname||"匿名",text,createdAt:m.createdAt||Date.now()};
+          saveLocalMessage(message); addMessage(message.nickname,message.text,message.sender===uid,message);
+        }
+      }catch(e){console.warn("无法处理消息",id,e);}
+    }
+    // 删除后同步清理本机历史；因此电脑端刷新也不会把撤回内容重新显示。
+    const local=loadSavedState(); if(local?.history?.length){ for(const h of local.history) if(h.id && !ids.has(h.id)) removeLocalMessage(h.id); }
+    messagesEl.scrollTop=messagesEl.scrollHeight;
   });
 }
 function currentHost(){return chat.dataset.host||"";}
