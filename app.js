@@ -119,7 +119,7 @@ function membersRef() { return ref(db, `rooms/${currentRoom}/members`); }
 function messagesRef() { return ref(db, `rooms/${currentRoom}/messages`); }
 
 async function join() {
-  status.textContent = "正在连接 Firebase…";
+  status.textContent = "正在连接云端服务器（可能需要挂梯子）";
   $("joinBtn").disabled = true;
   const room = $("roomId").value.trim();
   const password = $("roomPassword").value;
@@ -168,7 +168,7 @@ async function join() {
     $("joinBtn").disabled = false;
   } catch (e) {
     console.error(e);
-    status.textContent = e.code ? `${e.code}: ${e.message || "进入房间失败"}` : (e.message || "进入房间失败");
+    status.textContent = e.code ? `${e.code}: ${e.message || "进入房间失败（可能需要挂梯子）"}` : (e.message || "进入房间失败");
     $("joinBtn").disabled = false;
     cleanup();
   }
@@ -208,16 +208,16 @@ function listen() {
       });
 
       $("ownerInfo").textContent =
-        `房主：${members[currentHost()]?.nickname || "房主"}`;
+        `房主：${members[currentHost()]?.nickname || "房主不在线"}`;
     },
     error => {
       console.error("成员列表读取失败:", error);
       $("online").textContent = "成员列表读取失败";
       $("members").innerHTML = "";
       const li = document.createElement("li");
-      li.textContent = `读取失败：${error.message || error.code || "权限错误"}`;
+      li.textContent = `读取失败：${error.message || error.code || "权限错误（你有可能被踢出服务器或断开服务器连接）"}`;
       $("members").appendChild(li);
-      $("ownerInfo").textContent = "请检查 Firebase Database Rules 是否已发布";
+      $("ownerInfo").textContent = "你已与云端服务器断开连接，检查梯子状态并刷新页面（或被踢出服务器）";
     }
   );
 
