@@ -31,6 +31,51 @@ let messagesUnsub = null;
 let membersUnsub = null;
 let roomUnsub = null;
 let keyBytes = null;
+const STORAGE_KEY = "privateChatState_v3";
+
+function loadSavedState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch { return null; }
+}
+function saveState(extra = {}) {
+  try {
+    const old = loadSavedState() || {};
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      ...old,
+      roomId: $("roomId")?.value?.trim() || old.roomId || "",
+      nickname: $("nickname")?.value?.trim() || old.nickname || "",
+      ...extra
+    }));
+  } catch {}
+}
+function saveLocalMessage(m) {
+  try {
+    const s = loadSavedState() || {};
+    let h = Array.isArray(s.history) ? s.history : [];
+    if (m.id && h.some(x => x.id === m.id)) return;
+    h.push(m);
+    if (h.length > 500) h = h.slice(-500);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({...s, roomId: currentRoom, history: h}));
+  } catch {}
+}
+function restoreLoginForm() {
+  const s = loadSavedState();
+  if (!s) return;
+  if (s.roomId) $("roomId").value = s.roomId;
+  if (s.nickname) $("nickname").value = s.nickname;
+  if (s.password) $("roomPassword").value = s.password;
+}
+function renderLocalHistory() {
+  const s = loadSavedState();
+  if (!s || s.roomId !== currentRoom || !Array.isArray(s.history)) return;
+  messagesEl.innerHTML = "";
+  for (const m of s.history) addMessage(m.nickname || "匿名", m.text || "", m.sender === uid);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function clearLocalHistory() {
+  const s = loadSavedState() || {};
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({...s, history: []}));
+}
+
 let currentJoinTime = 0;
 
 const $ = id => document.getElementById(id);
@@ -82,6 +127,7 @@ async function join() {
 
   if (!room || !password) {
     status.textContent = "请输入房间 ID 和密码";
+    $("joinBtn").disabled = false;
     return;
   }
 
@@ -89,6 +135,7 @@ async function join() {
     await authUser();
     currentRoom = room;
     keyBytes = await deriveKey(password, room);
+    saveState({roomId: room, nickname, password});
 
     const snap = await get(roomRef());
     if (!snap.exists()) {
@@ -116,6 +163,7 @@ async function join() {
     login.classList.add("hidden");
     chat.classList.remove("hidden");
 
+    renderLocalHistory();
     listen();
     $("joinBtn").disabled = false;
   } catch (e) {
@@ -127,33 +175,51 @@ async function join() {
 }
 
 function listen() {
-  membersUnsub = onValue(membersRef(), snap => {
-    const members = snap.val() || {};
-    const list = $("members");
-    list.innerHTML = "";
-    const arr = Object.entries(members);
-    $("online").textContent = `${arr.length} 人在线`;
+  membersUnsub = onValue(
+    membersRef(),
+    snap => {
+      const members = snap.val() || {};
+      const list = $("members");
+      list.innerHTML = "";
 
-    arr.forEach(([id,m]) => {
+      const arr = Object.entries(members).filter(([id, m]) => m && typeof m === "object");
+      $("online").textContent = `${arr.length} 人在线`;
+
+      if (arr.length === 0) {
+        const li = document.createElement("li");
+        li.textContent = "暂无成员";
+        list.appendChild(li);
+      }
+
+      arr.forEach(([id, m]) => {
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = `${m.nickname || "匿名"}${id === currentHost() ? " 👑" : ""}`;
+        li.appendChild(name);
+
+        if (isHost() && id !== uid) {
+          const btn = document.createElement("button");
+          btn.textContent = "踢出";
+          btn.className = "kick";
+          btn.onclick = () => kick(id);
+          li.appendChild(btn);
+        }
+        list.appendChild(li);
+      });
+
+      $("ownerInfo").textContent =
+        `房主：${members[currentHost()]?.nickname || "房主"}`;
+    },
+    error => {
+      console.error("成员列表读取失败:", error);
+      $("online").textContent = "成员列表读取失败";
+      $("members").innerHTML = "";
       const li = document.createElement("li");
-      const name = document.createElement("span");
-      name.textContent = m.nickname || "匿名";
-      li.appendChild(name);
-
-      if (id !== uid && id === currentHost()) {
-        // host is shown naturally; no kick button
-      }
-      if (isHost() && id !== uid) {
-        const btn = document.createElement("button");
-        btn.textContent = "踢出";
-        btn.className = "kick";
-        btn.onclick = () => kick(id);
-        li.appendChild(btn);
-      }
-      list.appendChild(li);
-    });
-    $("ownerInfo").textContent = `房主：${members[currentHost()]?.nickname || "房主"}`;
-  });
+      li.textContent = `读取失败：${error.message || error.code || "权限错误"}`;
+      $("members").appendChild(li);
+      $("ownerInfo").textContent = "请检查 Firebase Database Rules 是否已发布";
+    }
+  );
 
   roomUnsub = onValue(roomRef(), snap => {
     if (!snap.exists()) {
@@ -170,7 +236,15 @@ function listen() {
     if (!m) return;
     try {
       const text = await decryptText(m.iv, m.data);
-      addMessage(m.nickname || "匿名", text, m.sender === uid);
+      const message = {
+        id: snap.key,
+        sender: m.sender,
+        nickname: m.nickname || "匿名",
+        text,
+        createdAt: m.createdAt || Date.now()
+      };
+      saveLocalMessage(message);
+      addMessage(message.nickname, message.text, message.sender === uid);
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } catch (e) {
       console.warn("无法解密消息", e);
@@ -207,11 +281,23 @@ async function sendMessage(text) {
   chat.dataset.host = roomSnap.val().hostUid || "";
 
   const encrypted = await encryptText(text.trim());
-  await push(messagesRef(), {
+  const messageRef = await push(messagesRef(), {
     sender: uid,
     nickname: $("nickname").value.trim() || "匿名",
     iv: encrypted.iv,
     data: encrypted.data,
+    createdAt: Date.now()
+  });
+  saveState({
+    roomId: currentRoom,
+    nickname: $("nickname").value.trim() || "匿名",
+    password: $("roomPassword").value
+  });
+  saveLocalMessage({
+    id: messageRef.key,
+    sender: uid,
+    nickname: $("nickname").value.trim() || "匿名",
+    text: text.trim(),
     createdAt: Date.now()
   });
   $("messageInput").value = "";
@@ -239,6 +325,8 @@ async function leave() {
   messagesEl.innerHTML = "";
 }
 
+restoreLoginForm();
+
 $("joinBtn").onclick = join;
 $("leaveBtn").onclick = leave;
 $("sendForm").onsubmit = e => { e.preventDefault(); sendMessage($("messageInput").value); };
@@ -247,3 +335,13 @@ $("sendForm").onsubmit = e => { e.preventDefault(); sendMessage($("messageInput"
 // Never use localStorage/sessionStorage/IndexedDB for chat history.
 // Messages exist only in the current page's memory/UI and disappear when the page is closed/refreshed.
 window.addEventListener("pagehide", cleanup);
+
+const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+if (clearHistoryBtn) {
+  clearHistoryBtn.onclick = () => {
+    if (confirm("确定清除本机保存的聊天记录吗？")) {
+      clearLocalHistory();
+      messagesEl.innerHTML = "";
+    }
+  };
+};
