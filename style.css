@@ -34,3 +34,5 @@ aside h3{margin-top:0}
   .messages{min-height:55vh}
   .msg{max-width:90%}
 }
+
+.fileControls{display:flex;align-items:center;gap:8px;margin:6px 0}.fileMessage,.recallBtn{cursor:pointer;padding:6px 9px;border-radius:8px;border:1px solid #bbb;background:transparent}.recallBtn{margin-left:6px;font-size:12px}#fileStatus{font-size:12px;opacity:.7}
