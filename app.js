@@ -1,11 +1,32 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
-import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
 import {
-  getDatabase, ref, get, set, push, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, onDisconnect, remove
+  getAuth,
+  signInAnonymously,
+  setPersistence,
+  browserLocalPersistence
+} from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
+import {
+  getDatabase,
+  ref,
+  get,
+  set,
+  push,
+  remove,
+  onValue,
+  onChildAdded,
+  onChildRemoved,
+  onDisconnect,
+  query,
+  orderByChild,
+  startAt
 } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
 
+/* =========================
+   slchat - clean client
+   ========================= */
+
 const firebaseConfig = {
-  apiKey: "AIzaSyBk_izQABm0jbdYachF7UzS4C_URlYTtJY",
+  apiKey: "AIzaSyBk_izQABm0jbdYachF7UzS4C_URtJY",
   authDomain: "slchat-back.firebaseapp.com",
   databaseURL: "https://slchat-back-default-rtdb.firebaseio.com",
   projectId: "slchat-back",
@@ -19,349 +40,675 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
 
+const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const FILE_CHUNK_SIZE = 5 * 1024 * 1024;
+const STORAGE_KEY = "slchatState_v1";
+
 let uid = null;
 let currentRoom = null;
+let nickname = "";
+let roomKey = "";
 let keyBytes = null;
+let isHost = false;
 let memberRef = null;
 let messagesUnsub = null;
+let removedUnsub = null;
 let membersUnsub = null;
 let roomUnsub = null;
-const STORAGE_KEY = "privateChatState_v3";
-
-function loadSavedState() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch { return null; }
-}
-function saveState(extra = {}) {
-  try {
-    const old = loadSavedState() || {};
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ...old,
-      roomId: $("roomId")?.value?.trim() || old.roomId || "",
-      nickname: $("nickname")?.value?.trim() || old.nickname || "",
-      ...extra
-    }));
-  } catch {}
-}
-function saveLocalMessage(m) {
-  try {
-    const s = loadSavedState() || {};
-    let h = Array.isArray(s.history) ? s.history : [];
-    if (m.id && h.some(x => x.id === m.id)) return;
-    h.push(m);
-    if (h.length > 500) h = h.slice(-500);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({...s, roomId: currentRoom, history: h}));
-  } catch {}
-}
-function removeLocalMessage(id) {
-  try {
-    const s = loadSavedState() || {};
-    const h = Array.isArray(s.history) ? s.history.filter(x => x.id !== id) : [];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({...s, history: h}));
-  } catch {}
-}
-function restoreLoginForm() {
-  const s = loadSavedState();
-  if (!s) return;
-  if (s.roomId) $("roomId").value = s.roomId;
-  if (s.nickname) $("nickname").value = s.nickname;
-  if (s.password) $("roomPassword").value = s.password;
-}
-function renderLocalHistory() {
-  const s = loadSavedState();
-  if (!s || s.roomId !== currentRoom || !Array.isArray(s.history)) return;
-  messagesEl.innerHTML = "";
-  for (const m of s.history) {
-    if (m.type === "file") addFileMessage(m, m.sender === uid);
-    else addMessage(m.nickname || "匿名", m.text || "", m.sender === uid, m);
-  }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-function clearLocalHistory() {
-  const s = loadSavedState() || {};
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({...s, history: []}));
-}
-
 let currentJoinTime = 0;
+
 const $ = id => document.getElementById(id);
 const login = $("login");
 const chat = $("chat");
-const status = $("loginStatus");
+const status = $("status");
 const messagesEl = $("messages");
+const membersEl = $("members");
+const memberCountEl = $("memberCount");
+const sendBtn = $("sendBtn");
+const textInput = $("textInput");
+const fileInput = $("fileInput");
+const joinBtn = $("joinBtn");
+const leaveBtn = $("leaveBtn");
 
-function bufToB64(buf) {
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  return btoa(binary);
+function setStatus(text) {
+  if (status) status.textContent = text;
 }
-function b64ToBuf(s) {
-  const bin = atob(s);
-  return Uint8Array.from(bin, c => c.charCodeAt(0)).buffer;
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
-async function deriveKey(password, roomId) {
+
+function bytesToBase64(bytes) {
+  let s = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    s += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(s);
+}
+
+function base64ToBytes(str) {
+  const raw = atob(str);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function deriveKey(password, room) {
   const enc = new TextEncoder();
-  const material = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const material = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
   return crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt:enc.encode("private-chat:"+roomId), iterations:150000, hash:"SHA-256"},
-    material, {name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]
+    {
+      name: "PBKDF2",
+      salt: enc.encode("slchat:" + room),
+      iterations: 150000,
+      hash: "SHA-256"
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
   );
 }
+
 async function encryptText(text) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = await crypto.subtle.encrypt({name:"AES-GCM",iv}, keyBytes, new TextEncoder().encode(text));
-  return {iv:bufToB64(iv), data:bufToB64(data)};
+  const data = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    keyBytes,
+    new TextEncoder().encode(text)
+  );
+  return { iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(data)) };
 }
-async function decryptText(iv, data) {
-  const plain = await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(b64ToBuf(iv))}, keyBytes, b64ToBuf(data));
+
+async function decryptText(iv64, data64) {
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(iv64) },
+    keyBytes,
+    base64ToBytes(data64)
+  );
   return new TextDecoder().decode(plain);
 }
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
-// RTDB SDK 单次写入上限为 16 MB，因此文件切成 5 MiB 分块；每块 Base64 后写入数据库。
-const FILE_CHUNK_SIZE = 5 * 1024 * 1024;
-
-function formatFileSize(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
-  if (n < 1024*1024*1024) return `${(n/1024/1024).toFixed(1)} MB`;
-  return `${(n/1024/1024/1024).toFixed(2)} GB`;
+function roomRef() {
+  return ref(db, `rooms/${currentRoom}`);
 }
-function fileMetaRef(fileId) { return ref(db, `rooms/${currentRoom}/files/${fileId}/meta`); }
-function fileRef(fileId) { return ref(db, `rooms/${currentRoom}/files/${fileId}`); }
+function infoRef() {
+  return ref(db, `rooms/${currentRoom}/info`);
+}
+function membersRef() {
+  return ref(db, `rooms/${currentRoom}/members`);
+}
+function messagesRef() {
+  return ref(db, `rooms/${currentRoom}/messages`);
+}
+function filesRef() {
+  return ref(db, `rooms/${currentRoom}/files`);
+}
+function fileRef(id) {
+  return ref(db, `rooms/${currentRoom}/files/${id}`);
+}
 
-async function sendFile(file) {
-  if (!currentRoom || !keyBytes) return;
-  if (file.type && file.type.startsWith("image/") && file.size > MAX_IMAGE_SIZE) { alert("图片不能超过 10 MB"); return; }
-  if (file.size > MAX_FILE_SIZE) { alert("文件不能超过 100 MB"); return; }
-  const btn=$("fileBtn"), st=$("fileStatus"); btn.disabled=true; st.textContent="正在加密…";
-  const fileId=crypto.randomUUID();
+function loadState() {
   try {
-    const iv=crypto.getRandomValues(new Uint8Array(12));
-    const encrypted=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv}, keyBytes, await file.arrayBuffer()));
-    const totalChunks=Math.ceil(encrypted.byteLength/FILE_CHUNK_SIZE);
-    await set(fileMetaRef(fileId), {
-      ownerUid:uid, name:file.name.slice(0,120), mime:file.type||"application/octet-stream",
-      size:file.size, encryptedSize:encrypted.byteLength, chunkSize:FILE_CHUNK_SIZE,
-      totalChunks, iv:bufToB64(iv), createdAt:Date.now()
-    });
-    for(let i=0;i<totalChunks;i++){
-      const a=i*FILE_CHUNK_SIZE, b=Math.min(encrypted.byteLength,a+FILE_CHUNK_SIZE);
-      await set(ref(db,`rooms/${currentRoom}/files/${fileId}/chunks/${i}`),bufToB64(encrypted.slice(a,b)));
-      st.textContent=`正在上传… ${Math.round(b/encrypted.byteLength*100)}%`;
-    }
-    const now=Date.now(), nick=$("nickname").value.trim()||"匿名";
-    const messageRef=await push(messagesRef(),{type:"file",sender:uid,nickname:nick,name:file.name.slice(0,120),mime:file.type||"application/octet-stream",size:file.size,iv:bufToB64(iv),fileId,ownerUid:uid,createdAt:now,totalChunks});
-    saveLocalMessage({id:messageRef.key,type:"file",sender:uid,nickname:nick,name:file.name.slice(0,120),mime:file.type||"application/octet-stream",size:file.size,iv:bufToB64(iv),fileId,ownerUid:uid,createdAt:now,totalChunks});
-  } catch(e) {
-    console.error(e); try{await remove(fileRef(fileId));}catch{}
-    alert("发送文件失败："+(e.message||e.code||"未知错误"));
-  } finally { btn.disabled=false; st.textContent=""; }
-}
-
-async function downloadEncryptedFile(m) {
-  try {
-    const snap=await get(fileRef(m.fileId)); if(!snap.exists()) throw new Error("文件已被撤回或不存在");
-    const d=snap.val()||{}, meta=d.meta||{}, chunks=d.chunks||{};
-    const total=Number(meta.totalChunks||m.totalChunks||0); if(!total) throw new Error("文件数据不完整");
-    const parts=[]; let totalBytes=0;
-    for(let i=0;i<total;i++){
-      const s=chunks[String(i)]; if(typeof s!=="string") throw new Error(`缺少第 ${i+1} 个文件分块`);
-      const p=new Uint8Array(b64ToBuf(s)); parts.push(p); totalBytes+=p.byteLength;
-    }
-    const encrypted=new Uint8Array(totalBytes); let off=0;
-    for(const p of parts){encrypted.set(p,off);off+=p.byteLength;}
-    const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(b64ToBuf(meta.iv||m.iv))},keyBytes,encrypted);
-    const blob=new Blob([plain],{type:meta.mime||m.mime||"application/octet-stream"});
-    const u=URL.createObjectURL(blob), a=document.createElement("a"); a.href=u; a.download=meta.name||m.name||"file"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),1000);
-  } catch(e){console.error(e);alert("文件下载或解密失败："+(e.message||"未知错误"));}
-}
-function addFileMessage(m,mine) {
-  const div=document.createElement("div"); div.className="msg"+(mine?" mine":""); div.dataset.messageId=m.id||"";
-  const meta=document.createElement("div"); meta.className="meta"; meta.textContent=m.nickname||"匿名"; div.appendChild(meta);
-  if (m.mime && m.mime.startsWith("image/")) {
-    const img=document.createElement("img"); img.className="filePreview"; img.alt=m.name||"图片"; img.title=m.name||"图片";
-    const loading=document.createElement("div"); loading.className="fileLoading"; loading.textContent=`正在加载图片… ${formatFileSize(m.size||0)}`;
-    div.appendChild(loading); div.appendChild(img);
-    loadEncryptedFileBlob(m).then(blob=>{
-      img.src=URL.createObjectURL(blob); loading.remove();
-      img.onload=()=>URL.revokeObjectURL(img.src);
-    }).catch(e=>{loading.textContent="图片加载失败，点击下载"; const b=document.createElement("button");b.type="button";b.className="fileMessage";b.textContent=`📎 ${m.name||"图片"}`;b.onclick=()=>downloadEncryptedFile(m);loading.replaceWith(b);});
-  } else {
-    const button=document.createElement("button"); button.type="button"; button.className="fileMessage"; button.textContent=`📎 ${m.name||"文件"}${m.size?` (${formatFileSize(m.size)})`:""}`; button.onclick=()=>downloadEncryptedFile(m); div.appendChild(button);
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  } catch {
+    return null;
   }
-  addRecallButton(div,m); messagesEl.appendChild(div);
-}
-function addRecallButton(container,m){
-  if(!m.id || (m.sender!==uid && !isHost())) return;
-  const btn=document.createElement("button"); btn.type="button"; btn.className="recallBtn"; btn.textContent="撤回";
-  btn.onclick=()=>recallMessage(m); container.appendChild(btn);
-}
-async function loadEncryptedFileBlob(m){
-  const snap=await get(fileRef(m.fileId)); if(!snap.exists()) throw new Error("文件已被撤回或不存在");
-  const v=snap.val(), meta=v.meta||{}, chunks=v.chunks||{};
-  const total=Number(m.totalChunks||meta.totalChunks||0); const parts=[];
-  for(let i=0;i<total;i++){ if(typeof chunks[i]!=="string") throw new Error(`文件分块 ${i+1} 缺失`); parts.push(new Uint8Array(b64ToBuf(chunks[i]))); }
-  const encrypted=new Uint8Array(parts.reduce((n,x)=>n+x.length,0)); let pos=0; for(const x of parts){encrypted.set(x,pos);pos+=x.length;}
-  const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(b64ToBuf(m.iv||meta.iv))},keyBytes,encrypted);
-  return new Blob([plain],{type:m.mime||meta.mime||"application/octet-stream"});
-}
-async function downloadEncryptedFile(m){
-  try{const blob=await loadEncryptedFileBlob(m);const u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=m.name||"file";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);}
-  catch(e){console.error(e);alert("文件下载或解密失败："+(e.message||"未知错误"));}
-}
-async function deleteFileData(fileId){
-  const snap=await get(fileRef(fileId));
-  if(!snap.exists()) return;
-  const d=snap.val()||{}, chunks=d.chunks||{};
-  for(const k of Object.keys(chunks)) await remove(ref(db,`rooms/${currentRoom}/files/${fileId}/chunks/${k}`));
-  await remove(fileMetaRef(fileId));
-}
-async function recallMessage(m){
-  if(!m.id||!currentRoom||(m.sender!==uid&&!isHost()))return;
-  try{
-    await remove(ref(db,`rooms/${currentRoom}/messages/${m.id}`));
-    if(m.type==="file"&&m.fileId){
-      try{await deleteFileData(m.fileId);}catch(e){console.warn("文件数据删除失败",e);}
-    }
-    removeLocalMessage(m.id);
-    const el=[...messagesEl.children].find(x=>x.dataset.messageId===m.id);
-    if(el)el.remove();
-  }catch(e){alert("撤回失败："+(e.message||e.code||"未知错误"));}
 }
 
-async function authUser() {
-  if (!auth.currentUser) await signInAnonymously(auth);
-  uid = auth.currentUser.uid;
+function saveState(history = null) {
+  const old = loadState() || {};
+  const state = {
+    ...old,
+    roomId: currentRoom,
+    nickname,
+    password: $("roomPassword")?.value || old.password || "",
+    history: history ?? old.history ?? []
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
-function roomRef() { return ref(db, `rooms/${currentRoom}/info`); }
-function membersRef() { return ref(db, `rooms/${currentRoom}/members`); }
-function messagesRef() { return ref(db, `rooms/${currentRoom}/messages`); }
 
-async function join() {
-  status.textContent = "正在连接可能需要梯子";$('joinBtn').disabled=true;
-  const room=$("roomId").value.trim(),password=$("roomPassword").value,nickname=$("nickname").value.trim()||"匿名";
-  if(!room||!password){status.textContent="请输入房间 ID 和密码";$('joinBtn').disabled=false;return;}
+function addLocalMessage(message) {
+  const state = loadState() || {};
+  const history = Array.isArray(state.history) ? state.history : [];
+  const filtered = history.filter(x => x?.id !== message.id);
+  filtered.push(message);
+  saveState(filtered.slice(-500));
+}
+
+function removeLocalMessage(id) {
+  const state = loadState();
+  if (!state || !Array.isArray(state.history)) return;
+  saveState(state.history.filter(x => x?.id !== id));
+}
+
+async function ensureAuth() {
+  await setPersistence(auth, browserLocalPersistence).catch(() => {});
+  if (auth.currentUser) {
+    uid = auth.currentUser.uid;
+    return;
+  }
   try {
-    await authUser();currentRoom=room;keyBytes=await deriveKey(password,room);saveState({roomId:room,nickname,password});
-    const snap=await get(roomRef());
-    if(!snap.exists()){
-      chat.dataset.host=uid;
-      const verifier=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(password));
-      await set(roomRef(),{passwordHash:bufToB64(verifier),hostUid:uid,createdAt:Date.now()});
-    }else{
-      chat.dataset.host=snap.val().hostUid||"";
-      const verifier=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(password));
-      if(snap.val().passwordHash!==bufToB64(verifier))throw new Error("房间密码错误");
+    const result = await signInAnonymously(auth);
+    uid = result.user.uid;
+  } catch (e) {
+    if (e.code === "auth/operation-not-allowed") {
+      throw new Error("服务器未开启匿名登录");
     }
-    currentJoinTime=Date.now();
-    memberRef=ref(db,`rooms/${room}/members/${uid}`);
-    await set(memberRef,{nickname,online:true,joinedAt:currentJoinTime});onDisconnect(memberRef).remove();
-    $("roomTitle").textContent=`房间：${room}`;login.classList.add("hidden");chat.classList.remove("hidden");
-    renderLocalHistory();listen();$('joinBtn').disabled=false;
-  }catch(e){console.error(e);status.textContent=e.code?`${e.code}: ${e.message||"进入房间失败"}`:(e.message||"进入房间失败");$('joinBtn').disabled=false;cleanup();}
+    if (e.code === "auth/network-request-failed") {
+      throw new Error("服务器连接失败，请检查网络");
+    }
+    throw new Error("服务器登录失败：" + (e.message || e.code || "未知错误"));
+  }
+}
+
+async function verifyOrCreateRoom(room, password) {
+  const info = await get(ref(db, `rooms/${room}/info`));
+
+  if (!info.exists()) {
+    const passwordHash = await sha256(password);
+    await set(ref(db, `rooms/${room}/info`), {
+      passwordHash,
+      hostUid: uid,
+      createdAt: Date.now()
+    });
+    return { host: true };
+  }
+
+  const data = info.val() || {};
+  const hash = await sha256(password);
+  if (hash !== data.passwordHash) {
+    throw new Error("房间密码错误");
+  }
+  return { host: data.hostUid === uid };
+}
+
+async function sha256(text) {
+  const data = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text)
+  );
+  return [...new Uint8Array(data)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
+async function joinRoom() {
+  const room = $("roomId")?.value.trim();
+  const password = $("roomPassword")?.value || "";
+  const name = $("nickname")?.value.trim() || "匿名";
+
+  if (!room) throw new Error("请输入房间号");
+  if (!password) throw new Error("请输入房间密码");
+
+  cleanup();
+  currentRoom = room;
+  nickname = name;
+  currentJoinTime = Date.now();
+
+  await ensureAuth();
+
+  const roomResult = await verifyOrCreateRoom(room, password);
+  isHost = roomResult.host;
+  roomKey = room;
+
+  keyBytes = await deriveKey(password, room);
+
+  const myMember = ref(db, `rooms/${room}/members/${uid}`);
+  memberRef = myMember;
+
+  await set(myMember, {
+    nickname,
+    online: true,
+    joinedAt: Date.now()
+  });
+
+  onDisconnect(myMember).remove();
+
+  $("roomTitle") && ($("roomTitle").textContent = "slchat");
+  login?.classList.add("hidden");
+  chat?.classList.remove("hidden");
+  messagesEl && (messagesEl.innerHTML = "");
+
+  await syncLocalHistoryWithServer();
+  renderLocalHistory();
+  listen();
+
+  setStatus("已连接服务器");
+}
+
+async function syncLocalHistoryWithServer() {
+  const state = loadState();
+  if (!state || state.roomId !== currentRoom || !Array.isArray(state.history)) return;
+
+  try {
+    const snap = await get(messagesRef());
+    const server = snap.val() || {};
+    const ids = new Set(Object.keys(server));
+    saveState(state.history.filter(m => ids.has(m.id)).slice(-500));
+  } catch (e) {
+    console.warn("同步历史失败", e);
+  }
+}
+
+function renderLocalHistory() {
+  const state = loadState();
+  if (!state?.history || !messagesEl) return;
+
+  for (const m of state.history) {
+    renderMessage(m, false);
+  }
 }
 
 function listen() {
-  membersUnsub=onValue(membersRef(),snap=>{
-    const members=snap.val()||{},list=$("members");list.innerHTML="";
-    const arr=Object.entries(members).filter(([id,m])=>m&&typeof m==="object");$("online").textContent=`${arr.length} 人在线`;
-    if(!arr.length){const li=document.createElement("li");li.textContent="暂无成员";list.appendChild(li);}
-    arr.forEach(([id,m])=>{
-      const li=document.createElement("li"),name=document.createElement("span");name.textContent=`${m.nickname||"匿名"}${id===currentHost()?" 👑":""}`;li.appendChild(name);
-      if(isHost()&&id!==uid){const btn=document.createElement("button");btn.textContent="踢出";btn.className="kick";btn.onclick=()=>kick(id);li.appendChild(btn);}list.appendChild(li);
-    });
-    $("ownerInfo").textContent=`房主：${members[currentHost()]?.nickname||"房主"}`;
-  },error=>{console.error("成员列表读取失败:",error);$("online").textContent="打开服务器连接或被踢出";$("members").innerHTML="";const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="请检查 Firebase Database Rules 是否已发布";});
+  const q = query(messagesRef(), orderByChild("createdAt"), startAt(currentJoinTime));
 
-  roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}else{chat.dataset.host=snap.val().hostUid||chat.dataset.host||"";}});
+  messagesUnsub = onChildAdded(q, async snap => {
+    const m = { id: snap.key, ...(snap.val() || {}) };
+    await handleIncomingMessage(m);
+  });
 
-  // 直接监听整个消息节点：新增、删除、撤回都会同步到电脑和手机，避免只监听加入房间后的消息导致撤回不同步。
-  messagesUnsub=onValue(messagesRef(),async snap=>{
-    const data=snap.val()||{}; const ids=new Set(Object.keys(data));
-    for(const el of [...messagesEl.children]) if(el.dataset.messageId && !ids.has(el.dataset.messageId)) el.remove();
-    const existing=new Set([...messagesEl.children].map(el=>el.dataset.messageId).filter(Boolean));
-    const arr=Object.entries(data).sort((a,b)=>(a[1]?.createdAt||0)-(b[1]?.createdAt||0));
-    for(const [id,m] of arr){
-      if(!m || existing.has(id)) continue;
-      try{
-        if(m.type==="file"){
-          const message={id,type:"file",sender:m.sender,nickname:m.nickname||"匿名",name:m.name,mime:m.mime,size:m.size,iv:m.iv,fileId:m.fileId,ownerUid:m.ownerUid||m.sender,createdAt:m.createdAt||Date.now(),totalChunks:m.totalChunks};
-          saveLocalMessage(message); addFileMessage(message,message.sender===uid);
-        }else{
-          const text=await decryptText(m.iv,m.data); const message={id,sender:m.sender,nickname:m.nickname||"匿名",text,createdAt:m.createdAt||Date.now()};
-          saveLocalMessage(message); addMessage(message.nickname,message.text,message.sender===uid,message);
-        }
-      }catch(e){console.warn("无法处理消息",id,e);}
+  removedUnsub = onChildRemoved(q, snap => {
+    removeLocalMessage(snap.key);
+    const el = messagesEl?.querySelector(`[data-message-id="${CSS.escape(snap.key)}"]`);
+    el?.remove();
+  });
+
+  membersUnsub = onValue(membersRef(), snap => {
+    const members = snap.val() || {};
+    const list = Object.entries(members);
+
+    if (memberCountEl) memberCountEl.textContent = String(list.length);
+    if (!membersEl) return;
+
+    membersEl.innerHTML = "";
+    for (const [id, m] of list) {
+      const row = document.createElement("div");
+      row.className = "member";
+      row.textContent = m.nickname || "匿名";
+
+      if (isHost && id !== uid) {
+        const kick = document.createElement("button");
+        kick.textContent = "踢出";
+        kick.onclick = () => kickUser(id);
+        row.appendChild(kick);
+      }
+      membersEl.appendChild(row);
     }
-    // 删除后同步清理本机历史；因此电脑端刷新也不会把撤回内容重新显示。
-    const local=loadSavedState(); if(local?.history?.length){ for(const h of local.history) if(h.id && !ids.has(h.id)) removeLocalMessage(h.id); }
-    messagesEl.scrollTop=messagesEl.scrollHeight;
+  });
+
+  roomUnsub = onValue(infoRef(), snap => {
+    if (!snap.exists()) {
+      setStatus("服务器已断开连接");
+      return;
+    }
+    const info = snap.val() || {};
+    if (info.deletingAt) {
+      setStatus("房间已关闭");
+      cleanup();
+      return;
+    }
+  });
+
+  // 服务器连接状态：不是“无法显示用户”，而是明确显示断开连接。
+  onValue(ref(db, ".info/connected"), snap => {
+    if (snap.val() === true) {
+      setStatus("已连接服务器");
+    } else {
+      setStatus("服务器连接已断开");
+    }
   });
 }
-function currentHost(){return chat.dataset.host||"";}
-function isHost(){return uid===currentHost();}
-function addMessage(nickname,text,mine,messageMeta=null){
-  const div=document.createElement("div");div.className="msg"+(mine?" mine":"");div.dataset.messageId=messageMeta?.id||"";
-  const meta=document.createElement("div");meta.className="meta";meta.textContent=nickname;const body=document.createElement("div");body.textContent=text;
-  div.appendChild(meta);div.appendChild(body);if(messageMeta)addRecallButton(div,messageMeta);messagesEl.appendChild(div);
+
+async function handleIncomingMessage(m) {
+  if (!m.id || !m.sender) return;
+
+  // 本地历史已经渲染过的消息不要重复显示。
+  if (messagesEl?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)) return;
+
+  addLocalMessage(m);
+  await renderMessage(m, true);
 }
-async function sendMessage(text){
-  if(!text.trim())return;const roomSnap=await get(roomRef());if(!roomSnap.exists())return;chat.dataset.host=roomSnap.val().hostUid||"";
-  const encrypted=await encryptText(text.trim()),now=Date.now();
-  const messageRef=await push(messagesRef(),{sender:uid,nickname:$("nickname").value.trim()||"匿名",iv:encrypted.iv,data:encrypted.data,createdAt:now});
-  saveState({roomId:currentRoom,nickname:$("nickname").value.trim()||"匿名",password:$("roomPassword").value});
-  saveLocalMessage({id:messageRef.key,sender:uid,nickname:$("nickname").value.trim()||"匿名",text:text.trim(),createdAt:now});
-  $("messageInput").value="";
+
+async function renderMessage(m, canRecall = true) {
+  const row = document.createElement("div");
+  row.className = "message";
+  row.dataset.messageId = m.id;
+
+  const head = document.createElement("div");
+  head.className = "message-head";
+  head.textContent = `${m.nickname || "匿名"} · ${new Date(m.createdAt || Date.now()).toLocaleTimeString()}`;
+
+  const body = document.createElement("div");
+  body.className = "message-body";
+
+  try {
+    if (m.type === "file") {
+      await renderFile(m, body);
+    } else {
+      body.textContent = await decryptText(m.iv, m.data);
+    }
+  } catch {
+    body.textContent = "消息解密失败";
+  }
+
+  row.append(head, body);
+
+  if (canRecall && (m.sender === uid || isHost)) {
+    const recall = document.createElement("button");
+    recall.textContent = "撤回";
+    recall.onclick = () => recallMessage(m);
+    row.appendChild(recall);
+  }
+
+  messagesEl?.appendChild(row);
+  messagesEl && (messagesEl.scrollTop = messagesEl.scrollHeight);
 }
-async function kick(targetUid){if(!isHost()||targetUid===uid)return;await remove(ref(db,`rooms/${currentRoom}/members/${targetUid}`));}
-function cleanup(){if(messagesUnsub)messagesUnsub();if(membersUnsub)membersUnsub();if(roomUnsub)roomUnsub();messagesUnsub=membersUnsub=roomUnsub=null;currentRoom=null;keyBytes=null;currentJoinTime=0;memberRef=null;}
-async function leave(){try{if(memberRef)await remove(memberRef);}catch{}cleanup();chat.classList.add("hidden");login.classList.remove("hidden");messagesEl.innerHTML="";}
 
-restoreLoginForm();
-$("joinBtn").onclick=join;
-$("leaveBtn").onclick=leave;
-$("sendForm").onsubmit=e=>{e.preventDefault();sendMessage($("messageInput").value);};
-window.addEventListener("pagehide",cleanup);
-const clearHistoryBtn=document.getElementById("clearHistoryBtn");
-if(clearHistoryBtn)clearHistoryBtn.onclick=()=>{if(confirm("确定清除本机保存的聊天记录吗？")){clearLocalHistory();messagesEl.innerHTML="";}};
-const fileInput=document.getElementById("fileInput");
-if(fileInput)fileInput.onchange=async()=>{const f=fileInput.files?.[0];fileInput.value="";if(f)await sendFile(f);};
+async function renderFile(m, body) {
+  const name = escapeHtml(m.name || "文件");
+  const button = document.createElement("button");
+  button.textContent = `📎 ${m.name || "文件"} (${formatBytes(m.size || 0)})`;
+  button.onclick = () => downloadFile(m);
+  body.appendChild(button);
 
-
-function bindLoginButton(){
-  const btn = $("joinBtn");
-  if (!btn) return;
-
-  btn.onclick = async function(){
-    if (btn.dataset.busy === "1") return;
-    btn.dataset.busy = "1";
-    btn.disabled = true;
-    status.textContent = "正在登录…";
+  if ((m.mime || "").startsWith("image/")) {
+    const img = document.createElement("img");
+    img.alt = m.name || "图片";
+    img.loading = "lazy";
+    img.style.maxWidth = "100%";
+    img.style.maxHeight = "420px";
+    img.style.display = "block";
+    img.style.marginTop = "8px";
 
     try {
-      const room = $("roomId").value.trim();
-      const password = $("roomPassword").value;
-      const nickname = $("nickname").value.trim() || "匿名";
-
-      if (!room) throw new Error("请输入房间号");
-      if (!password) throw new Error("请输入房间密码");
-
-      await join();
-    } catch (e) {
-      console.error("登录按钮错误:", e);
-      status.textContent = e?.message || "登录失败";
-    } finally {
-      btn.dataset.busy = "0";
-      btn.disabled = false;
+      const blob = await decryptFile(m);
+      img.src = URL.createObjectURL(blob);
+      body.appendChild(img);
+    } catch {
+      // 文件按钮仍然可用。
     }
+  }
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+async function sendText() {
+  const text = textInput?.value.trim();
+  if (!text || !currentRoom || !uid) return;
+
+  const encrypted = await encryptText(text);
+  const msg = {
+    sender: uid,
+    nickname,
+    ...encrypted,
+    createdAt: Date.now(),
+    type: "text"
   };
+
+  await push(messagesRef(), msg);
+  textInput.value = "";
+}
+
+async function sendFile(file) {
+  if (!file) return;
+
+  const isImage = (file.type || "").startsWith("image/") ||
+    /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)$/i.test(file.name);
+
+  if (isImage && file.size > MAX_IMAGE_SIZE) {
+    throw new Error("图片不能超过 10 MB");
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error("文件不能超过 100 MB");
+  }
+
+  // 为保证手机和电脑兼容，按块读取并分别 AES-GCM 加密。
+  const fileId = push(filesRef()).key;
+  const totalChunks = Math.ceil(file.size / FILE_CHUNK_SIZE);
+  const meta = {
+    ownerUid: uid,
+    name: file.name,
+    mime: file.type || "application/octet-stream",
+    size: file.size,
+    chunkSize: FILE_CHUNK_SIZE,
+    totalChunks,
+    createdAt: Date.now()
+  };
+
+  await set(ref(db, `rooms/${currentRoom}/files/${fileId}/meta`), meta);
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * FILE_CHUNK_SIZE;
+    const end = Math.min(file.size, start + FILE_CHUNK_SIZE);
+    const plain = new Uint8Array(await file.slice(start, end).arrayBuffer());
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      keyBytes,
+      plain
+    ));
+
+    const combined = new Uint8Array(iv.length + encrypted.length);
+    combined.set(iv, 0);
+    combined.set(encrypted, iv.length);
+
+    await set(
+      ref(db, `rooms/${currentRoom}/files/${fileId}/chunks/${i}`),
+      bytesToBase64(combined)
+    );
+  }
+
+  await push(messagesRef(), {
+    sender: uid,
+    nickname,
+    type: "file",
+    name: file.name,
+    mime: file.type || "application/octet-stream",
+    size: file.size,
+    fileId,
+    ownerUid: uid,
+    totalChunks,
+    createdAt: Date.now()
+  });
+}
+
+async function decryptFile(m) {
+  const snap = await get(fileRef(m.fileId));
+  if (!snap.exists()) throw new Error("文件不存在");
+
+  const data = snap.val() || {};
+  const chunks = data.chunks || {};
+  const parts = [];
+
+  for (let i = 0; i < (m.totalChunks || 0); i++) {
+    if (!chunks[i]) throw new Error("文件分块缺失");
+
+    const combined = base64ToBytes(chunks[i]);
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      keyBytes,
+      ciphertext
+    );
+    parts.push(new Uint8Array(plain));
+  }
+
+  return new Blob(parts, { type: m.mime || "application/octet-stream" });
+}
+
+async function downloadFile(m) {
+  try {
+    setStatus("正在从服务器读取文件…");
+    const blob = await decryptFile(m);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = m.name || "download";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setStatus("已连接服务器");
+  } catch (e) {
+    alert("文件读取失败：" + (e.message || "未知错误"));
+    setStatus("服务器连接已断开或文件不存在");
+  }
+}
+
+async function recallMessage(m) {
+  if (!m?.id || !currentRoom) return;
+  if (m.sender !== uid && !isHost) return;
+
+  try {
+    await remove(ref(db, `rooms/${currentRoom}/messages/${m.id}`));
+
+    if (m.fileId) {
+      // 由房主或文件拥有者清理整个文件节点。
+      try {
+        await remove(fileRef(m.fileId));
+      } catch (e) {
+        console.warn("文件数据删除失败", e);
+      }
+    }
+
+    removeLocalMessage(m.id);
+    messagesEl?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)?.remove();
+  } catch (e) {
+    alert("撤回失败：" + (e.message || "服务器拒绝操作"));
+  }
+}
+
+async function kickUser(targetUid) {
+  if (!isHost || !currentRoom || targetUid === uid) return;
+
+  try {
+    await remove(ref(db, `rooms/${currentRoom}/members/${targetUid}`));
+  } catch (e) {
+    alert("踢出失败：" + (e.message || "服务器拒绝操作"));
+  }
+}
+
+function cleanup() {
+  messagesUnsub?.();
+  removedUnsub?.();
+  membersUnsub?.();
+  roomUnsub?.();
+
+  messagesUnsub = null;
+  removedUnsub = null;
+  membersUnsub = null;
+  roomUnsub = null;
+
+  if (memberRef) {
+    // 不主动删除自己的成员节点，交给重新加入/服务器断开逻辑处理。
+    memberRef = null;
+  }
+
+  currentRoom = null;
+  roomKey = "";
+  keyBytes = null;
+  isHost = false;
+  currentJoinTime = 0;
+}
+
+async function leaveRoom() {
+  try {
+    if (memberRef) await remove(memberRef);
+  } catch {}
+  cleanup();
+  chat?.classList.add("hidden");
+  login?.classList.remove("hidden");
+  setStatus("已断开服务器");
+}
+
+function bindEvents() {
+  if (joinBtn) {
+    joinBtn.onclick = async () => {
+      if (joinBtn.dataset.busy === "1") return;
+      joinBtn.dataset.busy = "1";
+      joinBtn.disabled = true;
+      setStatus("正在连接服务器…");
+
+      try {
+        await joinRoom();
+      } catch (e) {
+        console.error(e);
+        setStatus(e?.message || "连接服务器失败");
+        cleanup();
+      } finally {
+        joinBtn.dataset.busy = "0";
+        joinBtn.disabled = false;
+      }
+    };
+  }
+
+  sendBtn?.addEventListener("click", () => {
+    sendText().catch(e => alert("发送失败：" + (e.message || "未知错误")));
+  });
+
+  textInput?.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendText().catch(err => alert("发送失败：" + (err.message || "未知错误")));
+    }
+  });
+
+  fileInput?.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = "";
+    if (!file) return;
+
+    try {
+      setStatus("正在上传到服务器…");
+      await sendFile(file);
+      setStatus("已连接服务器");
+    } catch (e) {
+      alert("文件发送失败：" + (e.message || "未知错误"));
+      setStatus("服务器连接已断开或上传失败");
+    }
+  });
+
+  leaveBtn?.addEventListener("click", leaveRoom);
+}
+
+function restoreLoginForm() {
+  const state = loadState();
+  if (!state) return;
+
+  if ($("roomId") && state.roomId) $("roomId").value = state.roomId;
+  if ($("nickname") && state.nickname) $("nickname").value = state.nickname;
+  if ($("roomPassword") && state.password) $("roomPassword").value = state.password;
+}
+
+function boot() {
+  restoreLoginForm();
+  bindEvents();
+
+  // 启动错误也直接显示，避免“点击完全没反应”。
+  setStatus("等待连接服务器");
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", bindLoginButton, {once:true});
+  document.addEventListener("DOMContentLoaded", boot, { once: true });
 } else {
-  bindLoginButton();
+  boot();
 }
-
