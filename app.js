@@ -233,7 +233,7 @@ function listen() {
     });
     $("ownerInfo").textContent=`房主：${members[currentHost()]?.nickname||"房主"}`;
   },error=>{
-    console.error("成员列表读取失败:",error);$("online").textContent="成员列表读取失败";$("members").innerHTML="";
+    console.error("你断开了网络连接或被踢出:",error);$("online").textContent="成员列表读取失败";$("members").innerHTML="";
     const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="请检查 Firebase Database Rules 是否已发布";
   });
 
