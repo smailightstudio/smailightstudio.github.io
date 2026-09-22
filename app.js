@@ -26,6 +26,7 @@ let memberRef = null;
 let messagesUnsub = null;
 let membersUnsub = null;
 let roomUnsub = null;
+let memberUnsub = null;
 const STORAGE_KEY = "privateChatState_v3";
 
 function loadSavedState() {
@@ -161,7 +162,9 @@ async function sendFile(file) {
 }
 
 async function downloadEncryptedFile(m) {
+  const st = $("fileStatus");
   try {
+    st.textContent = "下载 1/4：正在读取文件信息…";
     const snap=await get(fileRef(m.fileId)); if(!snap.exists()) throw new Error("文件已被撤回或不存在");
     const d=snap.val()||{}, meta=d.meta||{}, chunks=d.chunks||{};
     const total=Number(meta.totalChunks||m.totalChunks||0); if(!total) throw new Error("文件数据不完整");
@@ -169,13 +172,19 @@ async function downloadEncryptedFile(m) {
     for(let i=0;i<total;i++){
       const s=chunks[String(i)]; if(typeof s!=="string") throw new Error(`缺少第 ${i+1} 个文件分块`);
       const p=new Uint8Array(b64ToBuf(s)); parts.push(p); totalBytes+=p.byteLength;
+      st.textContent = `下载 2/4：正在读取分块 ${i+1}/${total}…`;
     }
+    st.textContent = "下载 3/4：正在合并文件…";
     const encrypted=new Uint8Array(totalBytes); let off=0;
     for(const p of parts){encrypted.set(p,off);off+=p.byteLength;}
+    st.textContent = "下载 3/4：正在解密文件…";
     const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(b64ToBuf(meta.iv||m.iv))},keyBytes,encrypted);
+    st.textContent = "下载 4/4：正在保存到设备…";
     const blob=new Blob([plain],{type:meta.mime||m.mime||"application/octet-stream"});
     const u=URL.createObjectURL(blob), a=document.createElement("a"); a.href=u; a.download=meta.name||m.name||"file"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),1000);
-  } catch(e){console.error(e);alert("文件下载或解密失败："+(e.message||"未知错误"));}
+    st.textContent = "下载完成";
+    setTimeout(()=>{ if(st.textContent === "下载完成") st.textContent=""; }, 2500);
+  } catch(e){console.error(e);st.textContent="下载失败";alert("文件下载或解密失败："+(e.message||"未知错误"));setTimeout(()=>{if(st.textContent==="下载失败")st.textContent="";},3000);}
 }
 function addFileMessage(m,mine) {
   const div=document.createElement("div"); div.className="msg"+(mine?" mine":""); div.dataset.messageId=m.id||"";
@@ -233,11 +242,17 @@ function listen() {
     });
     $("ownerInfo").textContent=`房主：${members[currentHost()]?.nickname||"房主"}`;
   },error=>{
-    console.error("你断开了网络连接或被踢出:",error);$("online").textContent="成员列表读取失败";$("members").innerHTML="";
-    const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"权限错误"}`;$("members").appendChild(li);$("ownerInfo").textContent="你断开了网络连接或被踢出";
+    console.error("成员列表读取失败:",error);$("online").textContent="连接异常";$("members").innerHTML="";
+    const li=document.createElement("li");li.textContent=`读取失败：${error.message||error.code||"连接异常"}`;$("members").appendChild(li);$("ownerInfo").textContent="请检查互联网连接或你是否已被踢出房间";
   });
 
   roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}});
+  memberUnsub=onValue(memberRef,snap=>{
+    if(!snap.exists() && currentRoom){
+      alert("你已被踢出房间");
+      leave();
+    }
+  });
   const newMessagesQuery=query(messagesRef(),orderByChild("createdAt"),startAt(currentJoinTime));
   messagesUnsub=onChildAdded(newMessagesQuery,async snap=>{
     const m=snap.val();if(!m)return;
@@ -270,7 +285,7 @@ async function sendMessage(text){
   $("messageInput").value="";
 }
 async function kick(targetUid){if(!isHost()||targetUid===uid)return;await remove(ref(db,`rooms/${currentRoom}/members/${targetUid}`));}
-function cleanup(){if(messagesUnsub)messagesUnsub();if(membersUnsub)membersUnsub();if(roomUnsub)roomUnsub();messagesUnsub=membersUnsub=roomUnsub=null;currentRoom=null;keyBytes=null;currentJoinTime=0;memberRef=null;}
+function cleanup(){if(messagesUnsub)messagesUnsub();if(membersUnsub)membersUnsub();if(roomUnsub)roomUnsub();if(memberUnsub)memberUnsub();messagesUnsub=membersUnsub=roomUnsub=memberUnsub=null;currentRoom=null;keyBytes=null;currentJoinTime=0;memberRef=null;}
 async function leave(){try{if(memberRef)await remove(memberRef);}catch{}cleanup();chat.classList.add("hidden");login.classList.remove("hidden");messagesEl.innerHTML="";}
 
 restoreLoginForm();
