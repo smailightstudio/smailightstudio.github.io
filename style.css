@@ -36,4 +36,3 @@ aside h3{margin-top:0}
 }
 
 .fileControls{display:flex;align-items:center;gap:8px;margin:6px 0}.fileMessage,.recallBtn{cursor:pointer;padding:6px 9px;border-radius:8px;border:1px solid #bbb;background:transparent}.recallBtn{margin-left:6px;font-size:12px}#fileStatus{font-size:12px;opacity:.7}
-.filePreview{display:block;max-width:min(420px,100%);max-height:420px;border-radius:10px;margin-top:6px;object-fit:contain;background:#fff}.fileLoading{font-size:12px;opacity:.7;margin:6px 0}.fileControls{flex-wrap:wrap}.recallBtn{background:#f5f5f5;color:#222}
