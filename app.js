@@ -164,7 +164,7 @@ async function sendFile(file) {
 async function downloadEncryptedFile(m) {
   const st = $("fileStatus");
   try {
-    st.textContent = "下载 1/4：正在读取文件信息…";
+    st.textContent = "下载 1/4：正在读取文件信息…（下载时间较长）";
     const snap=await get(fileRef(m.fileId)); if(!snap.exists()) throw new Error("文件已被撤回或不存在");
     const d=snap.val()||{}, meta=d.meta||{}, chunks=d.chunks||{};
     const total=Number(meta.totalChunks||m.totalChunks||0); if(!total) throw new Error("文件数据不完整");
@@ -249,7 +249,7 @@ function listen() {
   roomUnsub=onValue(roomRef(),snap=>{if(!snap.exists()){alert("房间已关闭");leave();}});
   memberUnsub=onValue(memberRef,snap=>{
     if(!snap.exists() && currentRoom){
-      alert("你已被踢出房间");
+      alert("网络异常或你被踢出房间或房间已关闭");
       leave();
     }
   });
